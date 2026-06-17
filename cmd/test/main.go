@@ -2,57 +2,46 @@ package main
 
 import (
 	"fmt"
+	"log"
 	"os"
-	"syscall"
+
+	"macstats/internal/display"
 )
 
 func main() {
-	dev := "/dev/cu.usbmodemUSB35INCHIPSV21"
-	dataFile := "/Users/bindok/project/macstats/35inchENG/config/3.5inchTheme1.data"
+	dataFile := "resources/themes/3.5inchTheme1.data"
 	data, err := os.ReadFile(dataFile)
 	if err != nil {
-		fmt.Printf("Error reading file: %v\n", err)
-		return
+		log.Fatal(err)
 	}
 
-	// Skip 256-byte .NET serialization header
-	payload := data[256:]
-	
-	if len(payload) < 4 {
-		fmt.Println("Error: payload too short")
-		return
-	}
-	
-	// Print protocol marker
-	marker := payload[:4]
-	fmt.Printf("Protocol marker: %02x %02x %02x %02x\n", marker[0], marker[1], marker[2], marker[3])
-	fmt.Printf("Pixel data (%d bytes)\n", len(payload)-4)
-	
-	// Now send to the device
-	const (
-		O_RDWR   = 2
-		O_NOCTTY = 8
-	)
-	fd, err := syscall.Open(dev, O_RDWR|O_NOCTTY, 0)
+	dev, err := resolveDevice()
 	if err != nil {
-		fmt.Printf("Error: %v\n", err)
-		return
+		log.Fatal(err)
 	}
-	defer syscall.Close(fd)
-	
-	// Try: send the FULL data file (including header)
-	wrote, err := syscall.Write(fd, data)
+
+	writer, err := display.NewWriter(dev)
 	if err != nil {
-		fmt.Printf("Full file write error: %v\n", err)
-	} else {
-		fmt.Printf("Full file: wrote %d bytes\n", wrote)
+		log.Fatal(err)
 	}
-	
-	// Wait, then try payload only
-	wrote, err = syscall.Write(fd, payload)
+
+	if err := writer.WriteFrame(data); err != nil {
+		log.Fatal(err)
+	}
+}
+
+func resolveDevice() (string, error) {
+	if device := os.Getenv("DISPLAY_DEVICE"); device != "" {
+		return device, nil
+	}
+
+	devices, err := display.DetectUSBSerialDevices()
 	if err != nil {
-		fmt.Printf("Payload write error: %v\n", err)
-	} else {
-		fmt.Printf("Payload: wrote %d bytes\n", wrote)
+		return "", err
 	}
+	if len(devices) == 0 {
+		return "", fmt.Errorf("no USB serial display devices detected; set DISPLAY_DEVICE to override")
+	}
+
+	return devices[0], nil
 }
