@@ -7,38 +7,54 @@ import (
 	"strings"
 )
 
+type CPUStats struct {
+	Usage     float64
+	PerCPU    []float64
+	Available bool
+}
+
+type GPUStats struct {
+	Usage     float64
+	Available bool
+}
+
+type SystemStats struct {
+	Temperature          float64
+	TemperatureAvailable bool
+	MaxMemory            uint64
+	UsedMemory           uint64
+}
+
 // Metrics holds all system metrics.
 type Metrics struct {
-	CPU struct {
-		Usage  float64
-		PerCPU []float64
-	}
-	GPU struct {
-		Usage float64
-	}
-	System struct {
-		Temperature float64
-		MaxMemory   uint64
-		UsedMemory  uint64
-	}
+	CPU    CPUStats
+	GPU    GPUStats
+	System SystemStats
 }
 
 func CollectMetrics() (Metrics, error) {
 	cpu := parseCPU()
-	perCPU := parsePerCoreCPU()
+	perCPU, perCPUAvailable := parsePerCoreCPU()
 	gpu := parseGPU()
-	temperature := parseTemperature()
+	temperature, temperatureAvailable := parseTemperature()
 	mem := parseMemory()
-	cpu.PerCPU = perCPU
+	cpu = mergeCPUStats(cpu, perCPU, perCPUAvailable)
 	return Metrics{
 		CPU: cpu,
 		GPU: gpu,
-		System: struct{ Temperature float64; MaxMemory uint64; UsedMemory uint64 }{
-			Temperature: temperature,
-			MaxMemory:   mem.Max,
-			UsedMemory:  mem.Used,
+		System: SystemStats{
+			Temperature:          temperature,
+			TemperatureAvailable: temperatureAvailable,
+			MaxMemory:            mem.MaxMemory,
+			UsedMemory:           mem.UsedMemory,
 		},
 	}, nil
+}
+
+func mergeCPUStats(cpu CPUStats, perCPU []float64, perCPUAvailable bool) CPUStats {
+	cpu.PerCPU = perCPU
+	cpu.Available = cpu.Available || perCPUAvailable
+	return cpu
 }
 
 func (m Metrics) String() string {
@@ -46,11 +62,11 @@ func (m Metrics) String() string {
 	return string(data)
 }
 
-func parseCPU() struct { Usage float64; PerCPU []float64 } {
+func parseCPU() CPUStats {
 	// top -l 1 -n 0 -F: "CPU usage: 1.58% user, 4.40% sys, 94.0% idle"
 	out, err := exec.Command("top", "-l", "1", "-n", "0", "-F").Output()
 	if err != nil {
-		return struct{ Usage float64; PerCPU []float64 }{0, nil}
+		return CPUStats{}
 	}
 
 	lines := strings.Split(string(out), "\n")
@@ -64,67 +80,76 @@ func parseCPU() struct { Usage float64; PerCPU []float64 } {
 					idle, _ = strconv.ParseFloat(trimmed[:len(trimmed)-5], 64)
 				}
 			}
-			return struct{ Usage float64; PerCPU []float64 }{100.0 - idle, nil}
+			return CPUStats{
+				Usage:     100.0 - idle,
+				Available: true,
+			}
 		}
 	}
-	return struct{ Usage float64; PerCPU []float64 }{0, nil}
+	return CPUStats{}
 }
 
-func parsePerCoreCPU() []float64 {
+func parsePerCoreCPU() ([]float64, bool) {
 	// sysctl hw.physicalcpu: total physical cores
 	out, err := exec.Command("sysctl", "hw.physicalcpu").Output()
 	if err != nil {
-		return nil
+		return nil, false
 	}
 	trim := strings.TrimSpace(string(out))
 	idx := strings.Index(trim, ":")
 	if idx == -1 {
-		return nil
+		return nil, false
 	}
-	n, _ := strconv.Atoi(strings.TrimSpace(trim[idx+1:]))
+	n, err := strconv.Atoi(strings.TrimSpace(trim[idx+1:]))
+	if err != nil {
+		return nil, false
+	}
 	// Return array of N core counts (just the count)
 	cores := make([]float64, n)
 	for i := 0; i < n; i++ {
-		cores[i] = 1.0  // just represent N cores
+		cores[i] = 1.0 // just represent N cores
 	}
-	return cores
+	return cores, true
 }
 
-func parseGPU() struct { Usage float64 } {
+func parseGPU() GPUStats {
 	// No GPU utilization available through standard CLI on Apple Silicon
 	// Available only through IOKit/PMPwrMgmt C API
-	return struct{ Usage float64 }{0}
+	return GPUStats{}
 }
 
-func parseTemperature() float64 {
+func parseTemperature() (float64, bool) {
 	// No CPU temperature data through standard CLI
 	// Available only through IOKit
-	return -1
+	return 0, false
 }
 
-func parseMemory() struct { Max uint64; Used uint64 } {
+func parseMemory() SystemStats {
 	out, err := exec.Command("sysctl", "hw.memsize").Output()
 	if err != nil {
-		return struct{ Max uint64; Used uint64 }{0, 0}
+		return SystemStats{}
 	}
 	trim := strings.TrimSpace(string(out))
 	idx := strings.Index(trim, ":")
 	if idx == -1 {
-		return struct{ Max uint64; Used uint64 }{0, 0}
+		return SystemStats{}
 	}
 	max, _ := strconv.ParseUint(strings.TrimSpace(trim[idx+1:]), 10, 64)
 
 	// vm_stat (pages, 16384 bytes per page on M-series)
 	out, err = exec.Command("vm_stat").Output()
 	if err != nil {
-		return struct{ Max uint64; Used uint64 }{max, 0}
+		return SystemStats{MaxMemory: max}
 	}
 	used := parseVMStat(out)
-	return struct{ Max uint64; Used uint64 }{max, used}
+	return SystemStats{
+		MaxMemory:  max,
+		UsedMemory: used,
+	}
 }
 
 func parseVMStat(data []byte) uint64 {
-	pages := uint64(16384)  // 16KB pages
+	pages := uint64(16384) // 16KB pages
 	var inUse uint64
 	for _, line := range strings.Split(string(data), "\n") {
 		trimmed := strings.TrimSpace(line)
