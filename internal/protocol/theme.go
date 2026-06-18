@@ -1,6 +1,10 @@
 package protocol
 
-import "errors"
+import (
+	"errors"
+
+	"macstats/internal/collector"
+)
 
 const themeHeaderLength = 256
 
@@ -25,5 +29,9 @@ func ParseTheme(data []byte) (Theme, error) {
 }
 
 func (t Theme) StartupPayload() []byte {
+	return t.Raw
+}
+
+func (t Theme) RefreshPayload(collector.Metrics) []byte {
 	return t.Raw
 }

@@ -1,10 +1,16 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"os"
+	"os/signal"
+	"syscall"
+	"time"
 
+	"macstats/internal/app"
+	"macstats/internal/collector"
 	"macstats/internal/display"
 	"macstats/internal/protocol"
 )
@@ -30,7 +36,17 @@ func main() {
 		log.Fatal(err)
 	}
 
-	if err := writer.WriteFrame(theme.StartupPayload()); err != nil {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	runner := app.Runner{
+		Writer:          writer,
+		Collector:       collectorFunc{},
+		Frames:          theme,
+		RefreshInterval: time.Second,
+	}
+
+	if err := runner.Run(ctx); err != nil {
 		log.Fatal(err)
 	}
 }
@@ -49,4 +65,10 @@ func resolveDevice() (string, error) {
 	}
 
 	return devices[0], nil
+}
+
+type collectorFunc struct{}
+
+func (collectorFunc) CollectMetrics() (collector.Metrics, error) {
+	return collector.CollectMetrics()
 }
