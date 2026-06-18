@@ -33,5 +33,6 @@ go.work.sum
 
 # Keep the vendor bundle local; curated copies live under resources/.
 35inchENG/
+docs/
 spec.md
 plan.md
