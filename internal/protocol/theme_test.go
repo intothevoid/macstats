@@ -48,3 +48,11 @@ func TestParseThemeRejectsShortBuffers(t *testing.T) {
 		t.Fatal("expected short buffer error")
 	}
 }
+
+func TestThemeStartupPayloadReturnsRawBytes(t *testing.T) {
+	theme := Theme{Raw: []byte{0x01, 0x02, 0x03}}
+
+	if got := theme.StartupPayload(); len(got) != 3 {
+		t.Fatalf("unexpected payload length: %d", len(got))
+	}
+}
